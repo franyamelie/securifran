@@ -1056,15 +1056,17 @@ async function deleteKnownFace(id){ await idbDelete('knownfaces', id); renderKno
 
 /* -------- Compresión del SDP (para que quepa en un QR) -------- */
 async function compressToBase64(str){
-  if('CompressionStream' in window){
-    const cs = new CompressionStream('gzip');
-    const writer = cs.writable.getWriter();
-    writer.write(new TextEncoder().encode(str));
-    writer.close();
-    const buf = await new Response(cs.readable).arrayBuffer();
-    let bin=''; new Uint8Array(buf).forEach(b=>bin+=String.fromCharCode(b));
-    return btoa(bin);
-  }
+  try{
+    if('CompressionStream' in window){
+      const cs = new CompressionStream('gzip');
+      const writer = cs.writable.getWriter();
+      writer.write(new TextEncoder().encode(str));
+      writer.close();
+      const buf = await new Response(cs.readable).arrayBuffer();
+      let bin=''; new Uint8Array(buf).forEach(b=>bin+=String.fromCharCode(b));
+      return btoa(bin);
+    }
+  }catch(e){ console.warn('Compresión no disponible, usando fallback sin comprimir', e); }
   return btoa(unescape(encodeURIComponent(str))); // fallback sin compresión
 }
 async function decompressFromBase64(b64){
@@ -1092,14 +1094,22 @@ async function showQr(text, title, sub, cb){
   const canvas = document.getElementById('qrCanvas');
   const errBox = document.getElementById('qrErrorBox');
   errBox.style.display='none';
-  const compressed = await compressToBase64(text);
-  QRCode.toCanvas(canvas, compressed, {width:280, margin:1, errorCorrectionLevel:'L'}, function(err){
-    if(err){
-      canvas.getContext('2d') && canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
-      errBox.style.display='block';
-      errBox.textContent = 'No se pudo generar el código: los datos son demasiado grandes para un QR (' + compressed.length + ' caracteres). Prueba a acercar más los móviles o reiniciar la cámara e inténtalo de nuevo.';
+  try{
+    const QRLib = (typeof QRCode !== 'undefined') ? QRCode : (typeof qrcode !== 'undefined' ? qrcode : null);
+    if(!QRLib){
+      throw new Error('La librería de códigos QR no se cargó (revisa la conexión a Internet en esta primera carga).');
     }
-  });
+    const compressed = await compressToBase64(text);
+    await new Promise((resolve, reject)=>{
+      QRLib.toCanvas(canvas, compressed, {width:280, margin:1, errorCorrectionLevel:'L'}, function(err){
+        if(err) reject(err); else resolve();
+      });
+    });
+  }catch(err){
+    console.error('Error generando QR:', err);
+    errBox.style.display='block';
+    errBox.textContent = 'No se pudo generar el código QR. Motivo: ' + (err && err.message ? err.message : String(err));
+  }
   _qrCallback = cb;
 }
 function afterQrShown(){ if(_qrCallback) _qrCallback(); }
