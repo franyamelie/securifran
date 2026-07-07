@@ -555,13 +555,21 @@ async function startScannerCamera(){
     document.getElementById('scanVideo').srcObject = scannerStream;
     scanLoop();
   }catch(e){
-    console.error('Error abriendo cámara del escáner:', e);
-    const box = document.getElementById('scannerErrorBox');
-    box.style.display='block';
-    if(e && e.message === 'TIMEOUT'){
-      box.textContent = 'La cámara no responde tras varios segundos. Esto suele pasar cuando el permiso de cámara está bloqueado a nivel del sistema Android (no solo en Chrome). Revisa: Ajustes del teléfono → Aplicaciones → Chrome → Permisos → Cámara → Permitir. Mientras tanto, puedes usar el campo de abajo para pegar el código.';
-    } else {
-      box.textContent = 'No se pudo abrir la cámara. Motivo: ' + (e && e.message ? e.message : String(e)) + '. Puedes usar el campo de abajo para pegar el código en su lugar.';
+    console.warn('Fallo con cámara trasera, probando con cualquier cámara disponible:', e);
+    try{
+      scannerStream = await withTimeout(navigator.mediaDevices.getUserMedia({video:true}), 8000);
+      document.getElementById('scanVideo').srcObject = scannerStream;
+      scanLoop();
+      return;
+    }catch(e2){
+      console.error('Error abriendo cámara del escáner (2º intento):', e2);
+      const box = document.getElementById('scannerErrorBox');
+      box.style.display='block';
+      if(e2 && e2.message === 'TIMEOUT'){
+        box.textContent = 'La cámara sigue sin responder. Prueba a cerrar Chrome por completo (Ajustes → Apps → Chrome → Forzar detención) y reabrirlo — puede que un intento anterior se quedara reteniendo la cámara. Mientras tanto, usa el campo de abajo para pegar el código.';
+      } else {
+        box.textContent = 'No se pudo abrir la cámara. Motivo: ' + (e2 && e2.message ? e2.message : String(e2)) + '. Puedes usar el campo de abajo para pegar el código en su lugar.';
+      }
     }
   }
 }
