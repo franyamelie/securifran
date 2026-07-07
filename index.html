@@ -460,11 +460,28 @@ async function flashWarningPulse(){
   }catch(e){}
 }
 
+function restrictCodecs(pc){
+  try{
+    if(typeof RTCRtpSender === 'undefined' || typeof RTCRtpSender.getCapabilities !== 'function') return;
+    pc.getTransceivers().forEach(t=>{
+      if(!t.sender || !t.sender.track || !t.setCodecPreferences) return;
+      const kind = t.sender.track.kind;
+      const caps = RTCRtpSender.getCapabilities(kind);
+      if(!caps || !caps.codecs) return;
+      let preferred;
+      if(kind==='video') preferred = caps.codecs.filter(c=>/VP8/i.test(c.mimeType));
+      else if(kind==='audio') preferred = caps.codecs.filter(c=>/opus/i.test(c.mimeType));
+      if(preferred && preferred.length) t.setCodecPreferences(preferred);
+    });
+  }catch(e){ console.warn('No se pudieron restringir los códecs (no crítico):', e); }
+}
+
 async function emisorStart(){
   if(!emisorStream){ toast('Esperando cámara...'); return; }
   emisorPC = makePeerConnection();
   setupEmisorDataChannel(emisorPC.createDataChannel('ctrl'));
   emisorStream.getTracks().forEach(t=>emisorPC.addTrack(t, emisorStream));
+  restrictCodecs(emisorPC); // reduce el SDP a un solo códec de audio/vídeo -> QR mucho menos denso
   emisorPC.onconnectionstatechange = ()=>{
     document.getElementById('emStatus').textContent = 'Conexión: '+emisorPC.connectionState;
     if(emisorPC.connectionState==='connected'){
@@ -542,6 +559,7 @@ async function onQrScanned(data){
       if(pc.connectionState==='connected') toast('Cámara '+id+' conectada');
     };
     await pc.setRemoteDescription({type:'offer', sdp: parsed.sdp});
+    restrictCodecs(pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await waitIceComplete(pc);
