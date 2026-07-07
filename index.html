@@ -46,7 +46,8 @@
   .navbtn.active{color:var(--accent);}
   .navbtn svg{width:22px;height:22px;}
   video{width:100%;border-radius:14px;background:#000;display:block;}
-  #liveWrap{position:relative;width:100%;border-radius:14px;overflow:hidden;background:#000;}
+  #liveWrap{position:relative;width:100%;min-height:340px;aspect-ratio:3/4;border-radius:14px;overflow:hidden;background:#000;}
+  #liveWrap video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
   #overlayCanvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
   .badge{background:var(--accent-dim);color:var(--accent);font-size:11px;padding:3px 8px;border-radius:8px;font-weight:600;}
   .badge.rec{background:#4a0000;color:var(--danger);}
@@ -99,6 +100,7 @@
   <!-- EMISOR -->
   <div class="screen" id="screen-emisor">
     <div class="row"><h1 style="margin:0;">Emisor</h1><span class="badge" id="emStatus">Sin conectar</span></div>
+    <div id="diagEmisor" style="display:none;font-size:11px;color:var(--muted);margin-bottom:6px;"></div>
     <div id="emisorErrorBox" style="display:none;color:var(--danger);font-size:13px;background:#2a0d0d;padding:10px;border-radius:10px;margin-bottom:6px;"></div>
     <button class="btn ghost" id="btnRetryCam" style="display:none;margin-bottom:12px;" onclick="startEmisorCamera()">🔁 Reintentar acceso a la cámara</button>
     <div id="liveWrap" style="margin-bottom:12px;">
@@ -126,6 +128,7 @@
       <h1 style="margin:0;">Cámaras</h1>
       <button class="btn small" onclick="openScanner('offer')">➕ Añadir cámara</button>
     </div>
+    <div id="diagReceptor" style="display:none;font-size:11px;color:var(--muted);margin-bottom:6px;"></div>
     <div id="camGrid"></div>
     <div class="center-msg" id="noCamsMsg">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 10l4.55-2.5a1 1 0 011.45.9v7.2a1 1 0 01-1.45.9L15 14M4 6h9a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2z"/></svg>
@@ -300,6 +303,11 @@ const defaultSettings = {
 };
 appState.settings = Object.assign({}, defaultSettings, appState.settings);
 
+function updateDiagBox(id, text){
+  const el = document.getElementById(id);
+  if(el){ el.style.display='block'; el.textContent = text; }
+}
+
 function saveSettings(){ localStorage.setItem('sf_settings', JSON.stringify(appState.settings)); }
 function showScreen(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
@@ -417,6 +425,7 @@ async function startEmisorCamera(){
       audio:true
     }), 8000);
     document.getElementById('emisorVideo').srcObject = emisorStream;
+    try{ await document.getElementById('emisorVideo').play(); }catch(playErr){ console.warn('Autoplay bloqueado, se necesitará un toque:', playErr); }
     emisorTrack = emisorStream.getVideoTracks()[0];
     document.getElementById('emStatus').textContent = 'Cámara lista';
     document.getElementById('emisorErrorBox').style.display='none';
@@ -524,6 +533,13 @@ async function emisorStart(){
       toast('Receptor conectado');
     }
   };
+  emisorPC.oniceconnectionstatechange = ()=>{
+    console.log('ICE state (emisor):', emisorPC.iceConnectionState);
+    updateDiagBox('diagEmisor', 'ICE: '+emisorPC.iceConnectionState);
+  };
+  emisorPC.onicecandidate = (ev)=>{
+    if(ev.candidate) console.log('Candidato local (emisor):', ev.candidate.candidate);
+  };
   const offer = await emisorPC.createOffer();
   await emisorPC.setLocalDescription(offer);
   await waitIceComplete(emisorPC);
@@ -629,6 +645,14 @@ async function processConnectionCode(data){
     pc.ondatachannel = (ev)=>{ camConnections[id].dataChannel = ev.channel; };
     pc.onconnectionstatechange = ()=>{
       if(pc.connectionState==='connected') toast('Cámara '+id+' conectada');
+      updateDiagBox('diagReceptor', id+': conn='+pc.connectionState);
+    };
+    pc.oniceconnectionstatechange = ()=>{
+      console.log('ICE state (receptor, '+id+'):', pc.iceConnectionState);
+      updateDiagBox('diagReceptor', id+': ICE='+pc.iceConnectionState);
+    };
+    pc.onicecandidate = (ev)=>{
+      if(ev.candidate) console.log('Candidato local (receptor, '+id+'):', ev.candidate.candidate);
     };
     await pc.setRemoteDescription({type:'offer', sdp: parsed.sdp});
     restrictCodecs(pc);
