@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>SecurityFran</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230c0c0c'/><circle cx='50' cy='45' r='22' fill='none' stroke='%23ff9500' stroke-width='6'/><circle cx='50' cy='45' r='8' fill='%23ff9500'/><rect x='30' y='68' width='40' height='8' rx='4' fill='%23ff9500'/></svg>">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#0c0c0c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%230c0c0c'/><circle cx='50' cy='45' r='22' fill='none' stroke='%23ff9500' stroke-width='6'/><circle cx='50' cy='45' r='8' fill='%23ff9500'/><rect x='30' y='68' width='40' height='8' rx='4' fill='%23ff9500'/></svg>">
 <style>
   :root{
     --bg:#0c0c0c; --bg2:#161616; --card:#1c1c1e; --accent:#ff9500; --accent-dim:#7a4a00;
@@ -118,7 +124,7 @@
       <button class="btn" style="display:none;" id="btnScanAnswer" onclick="openScanner('answer')">📷 Escanear respuesta del receptor</button>
     </div>
     <div class="card">
-      <div class="row"><span>Modo emisión continua</span><div class="toggle" id="tglContEmit" onclick="toggleSetting(this,'contEmitEnabled')"><div class="knob"></div></div></div>
+      <div class="row"><span>Mantener pantalla encendida (evita cortes)</span><div class="toggle" id="tglContEmit" onclick="toggleSetting(this,'contEmitEnabled'); applyWakeLockSetting();"><div class="knob"></div></div></div>
     </div>
   </div>
 
@@ -148,7 +154,7 @@
       <canvas id="overlayCanvas"></canvas>
     </div>
     <div class="grid2" style="margin-top:10px;">
-      <button class="btn" onclick="toggleNightVision()">🌙 Visión nocturna</button>
+      <button class="btn" id="btnNightVision" onclick="toggleNightVision()">🌙 Visión nocturna</button>
       <button class="btn" id="btnPause" onclick="togglePause()">⏸️ Pausa</button>
     </div>
     <div class="row" style="margin-top:8px;gap:8px;">
@@ -356,6 +362,27 @@ function chooseRole(role){
   localStorage.setItem('sf_role', role);
   initRoleUI();
 }
+let _wakeLock=null;
+async function applyWakeLockSetting(){
+  try{
+    if(appState.settings.contEmitEnabled && 'wakeLock' in navigator){
+      if(!_wakeLock || _wakeLock.released){
+        _wakeLock = await navigator.wakeLock.request('screen');
+        _wakeLock.addEventListener('release', ()=>{ console.log('Wake lock liberado'); });
+        toast('Pantalla se mantendrá encendida mientras uses la app');
+      }
+    } else if(_wakeLock && !_wakeLock.released){
+      await _wakeLock.release();
+      _wakeLock = null;
+    }
+  }catch(e){ console.warn('Wake Lock no disponible en este navegador:', e); }
+}
+document.addEventListener('visibilitychange', async ()=>{
+  if(document.visibilityState==='visible' && appState.settings.contEmitEnabled){
+    await applyWakeLockSetting(); // Android libera el wake lock al minimizar; lo recuperamos al volver
+  }
+});
+
 function stopAllMediaStreams(){
   if(emisorStream){ emisorStream.getTracks().forEach(t=>t.stop()); emisorStream=null; }
   if(emisorPC){ try{ emisorPC.close(); }catch(e){} emisorPC=null; }
@@ -430,6 +457,7 @@ async function startEmisorCamera(){
     document.getElementById('emStatus').textContent = 'Cámara lista';
     document.getElementById('emisorErrorBox').style.display='none';
     document.getElementById('btnRetryCam').style.display='none';
+    applyWakeLockSetting();
   }catch(err){
     console.error('Error accediendo a la cámara del emisor:', err);
     document.getElementById('emStatus').textContent = 'Cámara no disponible';
@@ -451,14 +479,27 @@ async function switchCamera(){
     const sender = emisorPC.getSenders().find(s=>s.track && s.track.kind==='video');
     if(sender) sender.replaceTrack(emisorStream.getVideoTracks()[0]);
   }
+  torchOn = false;
+  const btn = document.getElementById('btnTorch');
+  btn.style.background=''; btn.style.color='';
 }
 async function toggleTorch(){
   if(!emisorTrack) return;
+  const caps = emisorTrack.getCapabilities ? emisorTrack.getCapabilities() : null;
+  if(caps && caps.torch === undefined){
+    toast('Esta cámara no tiene LED/flash controlable (revisa que estés usando la cámara trasera).');
+    return;
+  }
+  const newState = !torchOn;
   try{
-    torchOn = !torchOn;
-    await emisorTrack.applyConstraints({advanced:[{torch:torchOn}]});
+    await emisorTrack.applyConstraints({advanced:[{torch:newState}]});
+    torchOn = newState;
+    const btn = document.getElementById('btnTorch');
+    btn.style.background = torchOn ? 'var(--accent)' : '';
+    btn.style.color = torchOn ? '#1a1200' : '';
     toast(torchOn ? 'LED encendido' : 'LED apagado');
   }catch(e){
+    console.warn('No se pudo controlar el LED:', e);
     toast('Este dispositivo no permite controlar el LED por software.');
   }
 }
@@ -776,10 +817,14 @@ async function openFullscreenCam(id){
   const fullVideo = document.getElementById('fullVideo');
   fullVideo.srcObject = stream;
   zoomLevel = 1; fullVideo.style.transform = 'scale(1)';
+  nightVisionOn = false; fullVideo.style.filter = 'none';
+  const nvBtn = document.getElementById('btnNightVision');
+  nvBtn.classList.remove('on-night'); nvBtn.style.background=''; nvBtn.style.color='';
   document.getElementById('sensSlider').value = appState.settings.sensitivity;
   await ensureModelsLoaded();
   document.getElementById('cvDetBadge').textContent='Detectando…';
   startDetectionLoop();
+  applyWakeLockSetting();
   if(appState.settings.continuousRec) startContinuousRecording();
 }
 function closeFullscreenCam(){
@@ -1028,11 +1073,12 @@ function flashAlertScreen(){
 function startRecording(){
   const stream = camConnections[fsCamId] && camConnections[fsCamId].stream;
   if(!stream) return;
+  const recCamId = fsCamId; // capturado ahora: si cierras la vista antes de que termine de guardar, no se pierde
   try{
     recChunks=[];
     mediaRecorder = new MediaRecorder(stream, {mimeType: MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm'});
     mediaRecorder.ondataavailable = e=>{ if(e.data.size>0) recChunks.push(e.data); };
-    mediaRecorder.onstop = saveRecording;
+    mediaRecorder.onstop = ()=>saveRecording(recCamId);
     mediaRecorder.start();
     isRecording=true; recStartTime=Date.now();
     document.getElementById('cvRecBadge').style.display='inline-block';
@@ -1056,13 +1102,13 @@ function stopRecordingIfActive(){
   isRecording=false;
   document.getElementById('cvRecBadge') && (document.getElementById('cvRecBadge').style.display='none');
 }
-async function saveRecording(){
+async function saveRecording(recCamId){
   if(recChunks.length===0) return;
   const blob = new Blob(recChunks, {type: recChunks[0].type || 'video/webm'});
   const durationMs = Date.now()-recStartTime;
   const rec = {
     id: 'rec_'+Date.now(),
-    camId: fsCamId,
+    camId: recCamId || fsCamId || 'desconocida',
     ts: Date.now(),
     durationMs,
     blob
@@ -1075,7 +1121,10 @@ async function saveRecording(){
 /* -------- Night vision / pause / zoom -------- */
 function toggleNightVision(){
   nightVisionOn = !nightVisionOn;
-  toast(nightVisionOn ? 'Visión nocturna (software) activada' : 'Visión nocturna desactivada');
+  document.getElementById('btnNightVision').classList.toggle('on-night', nightVisionOn);
+  document.getElementById('btnNightVision').style.background = nightVisionOn ? 'var(--accent)' : '';
+  document.getElementById('btnNightVision').style.color = nightVisionOn ? '#1a1200' : '';
+  toast(nightVisionOn ? 'Visión nocturna (software) ACTIVADA' : 'Visión nocturna desactivada');
 }
 function togglePause(){
   paused = !paused;
