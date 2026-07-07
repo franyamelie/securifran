@@ -233,6 +233,11 @@
         Enfoca el código QR
       </div>
     </div>
+    <div style="background:var(--bg);padding:14px;">
+      <p class="sub" style="margin-bottom:6px;">¿Te lo han pasado por Bluetooth/Nearby o mensaje en vez de QR? Pégalo aquí:</p>
+      <input type="text" id="manualCodeInput" placeholder="Pega el código recibido">
+      <button class="btn primary" style="margin-top:8px;" onclick="onManualCodeSubmit()">Usar este código</button>
+    </div>
   </div>
 
   <!-- QR RESULT MODAL (para mostrar el QR que hay que escanear en el otro móvil) -->
@@ -241,7 +246,12 @@
     <p class="sub" id="qrShowSub"></p>
     <div class="qrbox"><canvas id="qrCanvas"></canvas></div>
     <div id="qrErrorBox" style="display:none;color:var(--danger);font-size:13px;background:#2a0d0d;padding:10px;border-radius:10px;margin-bottom:10px;"></div>
-    <button class="btn primary" onclick="afterQrShown()" id="qrShowNextBtn">Ya lo ha escaneado / Continuar</button>
+    <div class="grid2" style="margin-bottom:10px;">
+      <button class="btn" onclick="shareConnectionCode()">📤 Compartir código</button>
+      <button class="btn" onclick="copyConnectionCode()">📋 Copiar código</button>
+    </div>
+    <p class="sub" style="margin-top:-4px;">"Compartir" abre el menú de Android — ahí puedes elegir Bluetooth o Nearby Share, que funcionan sin Internet.</p>
+    <button class="btn primary" onclick="afterQrShown()" id="qrShowNextBtn">Ya se lo has pasado / Continuar</button>
     <button class="btn ghost" onclick="closeQrShow()">Cancelar</button>
   </div>
 
@@ -493,7 +503,7 @@ async function emisorStart(){
   await emisorPC.setLocalDescription(offer);
   await waitIceComplete(emisorPC);
   const payload = JSON.stringify({t:'offer', sdp: emisorPC.localDescription.sdp});
-  showQr(payload, 'Muestra este código al RECEPTOR', 'Escanéalo con el botón "Añadir cámara" del receptor.', ()=>{
+  showQr(payload, 'Envía este código al RECEPTOR', 'Compártelo por Bluetooth/Nearby, o que te escaneen el QR.', ()=>{
     closeQrShow();
     document.getElementById('btnScanAnswer').style.display='block';
   });
@@ -542,11 +552,21 @@ function closeScanner(){
 async function onQrScanned(data){
   if(scannerRAF) cancelAnimationFrame(scannerRAF);
   if(scannerStream) scannerStream.getTracks().forEach(t=>t.stop());
+  await processConnectionCode(data);
+}
+async function onManualCodeSubmit(){
+  const val = document.getElementById('manualCodeInput').value.trim();
+  if(!val){ toast('Pega primero el código'); return; }
+  if(scannerRAF) cancelAnimationFrame(scannerRAF);
+  if(scannerStream) scannerStream.getTracks().forEach(t=>t.stop());
+  await processConnectionCode(val);
+}
+async function processConnectionCode(data){
   let parsed;
   try{
     const decompressed = await decompressFromBase64(data);
     parsed = JSON.parse(decompressed);
-  }catch(e){ toast('QR no válido o dañado'); closeScanner(); return; }
+  }catch(e){ toast('Código no válido o dañado'); closeScanner(); return; }
 
   if(window._scanMode==='offer'){
     // Receptor añadiendo un emisor nuevo
@@ -565,7 +585,7 @@ async function onQrScanned(data){
     await waitIceComplete(pc);
     const payload = JSON.stringify({t:'answer', sdp: pc.localDescription.sdp});
     createCamTile(id);
-    showQr(payload, 'Muestra este código al EMISOR', 'El emisor debe escanearlo para completar la conexión.', ()=>{
+    showQr(payload, 'Envía este código al EMISOR', 'El emisor debe introducirlo para completar la conexión.', ()=>{
       closeQrShow(); showTab('receptor');
     });
   } else if(window._scanMode==='answer'){
@@ -1105,6 +1125,7 @@ async function decompressFromBase64(b64){
 
 /* -------- QR show helper -------- */
 let _qrCallback=null;
+let _lastCompressedCode=null;
 async function showQr(text, title, sub, cb){
   document.getElementById('qrShowTitle').textContent = title;
   document.getElementById('qrShowSub').textContent = sub;
@@ -1112,12 +1133,13 @@ async function showQr(text, title, sub, cb){
   const canvas = document.getElementById('qrCanvas');
   const errBox = document.getElementById('qrErrorBox');
   errBox.style.display='none';
+  const compressed = await compressToBase64(text);
+  _lastCompressedCode = compressed;
   try{
     const QRLib = (typeof QRCode !== 'undefined') ? QRCode : (typeof qrcode !== 'undefined' ? qrcode : null);
     if(!QRLib){
       throw new Error('La librería de códigos QR no se cargó (revisa la conexión a Internet en esta primera carga).');
     }
-    const compressed = await compressToBase64(text);
     await new Promise((resolve, reject)=>{
       QRLib.toCanvas(canvas, compressed, {width:280, margin:1, errorCorrectionLevel:'L'}, function(err){
         if(err) reject(err); else resolve();
@@ -1126,9 +1148,28 @@ async function showQr(text, title, sub, cb){
   }catch(err){
     console.error('Error generando QR:', err);
     errBox.style.display='block';
-    errBox.textContent = 'No se pudo generar el código QR. Motivo: ' + (err && err.message ? err.message : String(err));
+    errBox.textContent = 'No se pudo generar el código QR (' + (err && err.message ? err.message : String(err)) + '). Usa mejor "Compartir código" o "Copiar código" abajo.';
   }
   _qrCallback = cb;
+}
+async function shareConnectionCode(){
+  if(!_lastCompressedCode){ toast('Aún no hay código listo'); return; }
+  if(navigator.share){
+    try{
+      await navigator.share({title:'SecurityFran - código de conexión', text: _lastCompressedCode});
+    }catch(e){ /* usuario canceló, no pasa nada */ }
+  } else {
+    toast('Tu navegador no soporta compartir directo; usa "Copiar código" y pégalo donde quieras enviarlo.');
+  }
+}
+async function copyConnectionCode(){
+  if(!_lastCompressedCode){ toast('Aún no hay código listo'); return; }
+  try{
+    await navigator.clipboard.writeText(_lastCompressedCode);
+    toast('Código copiado. Pégalo en el otro móvil (mensaje, Bluetooth, etc.)');
+  }catch(e){
+    toast('No se pudo copiar automáticamente. Selecciona el texto manualmente.');
+  }
 }
 function afterQrShown(){ if(_qrCallback) _qrCallback(); }
 function closeQrShow(){
