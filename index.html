@@ -240,6 +240,7 @@
     <h1 id="qrShowTitle">Código de conexión</h1>
     <p class="sub" id="qrShowSub"></p>
     <div class="qrbox"><canvas id="qrCanvas"></canvas></div>
+    <div id="qrErrorBox" style="display:none;color:var(--danger);font-size:13px;background:#2a0d0d;padding:10px;border-radius:10px;margin-bottom:10px;"></div>
     <button class="btn primary" onclick="afterQrShown()" id="qrShowNextBtn">Ya lo ha escaneado / Continuar</button>
     <button class="btn ghost" onclick="closeQrShow()">Cancelar</button>
   </div>
@@ -525,7 +526,10 @@ async function onQrScanned(data){
   if(scannerRAF) cancelAnimationFrame(scannerRAF);
   if(scannerStream) scannerStream.getTracks().forEach(t=>t.stop());
   let parsed;
-  try{ parsed = JSON.parse(data); }catch(e){ toast('QR no válido'); closeScanner(); return; }
+  try{
+    const decompressed = await decompressFromBase64(data);
+    parsed = JSON.parse(decompressed);
+  }catch(e){ toast('QR no válido o dañado'); closeScanner(); return; }
 
   if(window._scanMode==='offer'){
     // Receptor añadiendo un emisor nuevo
@@ -1050,15 +1054,51 @@ async function renderKnownFaces(){
 }
 async function deleteKnownFace(id){ await idbDelete('knownfaces', id); renderKnownFaces(); }
 
+/* -------- Compresión del SDP (para que quepa en un QR) -------- */
+async function compressToBase64(str){
+  if('CompressionStream' in window){
+    const cs = new CompressionStream('gzip');
+    const writer = cs.writable.getWriter();
+    writer.write(new TextEncoder().encode(str));
+    writer.close();
+    const buf = await new Response(cs.readable).arrayBuffer();
+    let bin=''; new Uint8Array(buf).forEach(b=>bin+=String.fromCharCode(b));
+    return btoa(bin);
+  }
+  return btoa(unescape(encodeURIComponent(str))); // fallback sin compresión
+}
+async function decompressFromBase64(b64){
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  if('DecompressionStream' in window){
+    try{
+      const ds = new DecompressionStream('gzip');
+      const writer = ds.writable.getWriter();
+      writer.write(bytes); writer.close();
+      const buf = await new Response(ds.readable).arrayBuffer();
+      return new TextDecoder().decode(buf);
+    }catch(e){ /* no estaba comprimido, cae al fallback */ }
+  }
+  return decodeURIComponent(escape(bin));
+}
+
 /* -------- QR show helper -------- */
 let _qrCallback=null;
-function showQr(text, title, sub, cb){
+async function showQr(text, title, sub, cb){
   document.getElementById('qrShowTitle').textContent = title;
   document.getElementById('qrShowSub').textContent = sub;
   showScreen('screen-qrshow');
   const canvas = document.getElementById('qrCanvas');
-  QRCode.toCanvas(canvas, text, {width:260, margin:1, errorCorrectionLevel:'L'}, function(err){
-    if(err){ toast('Error generando QR: datos demasiado largos'); }
+  const errBox = document.getElementById('qrErrorBox');
+  errBox.style.display='none';
+  const compressed = await compressToBase64(text);
+  QRCode.toCanvas(canvas, compressed, {width:280, margin:1, errorCorrectionLevel:'L'}, function(err){
+    if(err){
+      canvas.getContext('2d') && canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
+      errBox.style.display='block';
+      errBox.textContent = 'No se pudo generar el código: los datos son demasiado grandes para un QR (' + compressed.length + ' caracteres). Prueba a acercar más los móviles o reiniciar la cámara e inténtalo de nuevo.';
+    }
   });
   _qrCallback = cb;
 }
