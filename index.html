@@ -99,6 +99,8 @@
   <!-- EMISOR -->
   <div class="screen" id="screen-emisor">
     <div class="row"><h1 style="margin:0;">Emisor</h1><span class="badge" id="emStatus">Sin conectar</span></div>
+    <div id="emisorErrorBox" style="display:none;color:var(--danger);font-size:13px;background:#2a0d0d;padding:10px;border-radius:10px;margin-bottom:6px;"></div>
+    <button class="btn ghost" id="btnRetryCam" style="display:none;margin-bottom:12px;" onclick="startEmisorCamera()">🔁 Reintentar acceso a la cámara</button>
     <div id="liveWrap" style="margin-bottom:12px;">
       <video id="emisorVideo" autoplay playsinline muted></video>
     </div>
@@ -234,6 +236,7 @@
       </div>
     </div>
     <div style="background:var(--bg);padding:14px;">
+      <div id="scannerErrorBox" style="display:none;color:var(--danger);font-size:13px;background:#2a0d0d;padding:10px;border-radius:10px;margin-bottom:10px;"></div>
       <p class="sub" style="margin-bottom:6px;">¿Te lo han pasado por Bluetooth/Nearby o mensaje en vez de QR? Pégalo aquí:</p>
       <input type="text" id="manualCodeInput" placeholder="Pega el código recibido">
       <button class="btn primary" style="margin-top:8px;" onclick="onManualCodeSubmit()">Usar este código</button>
@@ -345,7 +348,18 @@ function chooseRole(role){
   localStorage.setItem('sf_role', role);
   initRoleUI();
 }
+function stopAllMediaStreams(){
+  if(emisorStream){ emisorStream.getTracks().forEach(t=>t.stop()); emisorStream=null; }
+  if(emisorPC){ try{ emisorPC.close(); }catch(e){} emisorPC=null; }
+  Object.values(camConnections).forEach(c=>{
+    if(c.stream) c.stream.getTracks().forEach(t=>t.stop());
+    if(c.pc) try{ c.pc.close(); }catch(e){}
+  });
+  camConnections = {};
+  if(scannerStream){ scannerStream.getTracks().forEach(t=>t.stop()); scannerStream=null; }
+}
 function resetRole(){
+  stopAllMediaStreams();
   appState.role = null;
   localStorage.removeItem('sf_role');
   document.getElementById('navbar').style.display='none';
@@ -405,8 +419,15 @@ async function startEmisorCamera(){
     document.getElementById('emisorVideo').srcObject = emisorStream;
     emisorTrack = emisorStream.getVideoTracks()[0];
     document.getElementById('emStatus').textContent = 'Cámara lista';
+    document.getElementById('emisorErrorBox').style.display='none';
+    document.getElementById('btnRetryCam').style.display='none';
   }catch(err){
-    toast('Error accediendo a la cámara: '+err.message, 4000);
+    console.error('Error accediendo a la cámara del emisor:', err);
+    document.getElementById('emStatus').textContent = 'Cámara no disponible';
+    const box = document.getElementById('emisorErrorBox');
+    box.style.display='block';
+    box.textContent = 'No se pudo acceder a la cámara. Motivo: ' + (err && err.message ? err.message : String(err)) + '. Revisa que el permiso de cámara esté concedido para este sitio en Chrome (icono 🔒 o ⓘ junto a la dirección → Permisos → Cámara).';
+    document.getElementById('btnRetryCam').style.display='block';
   }
 }
 async function switchCamera(){
@@ -517,6 +538,7 @@ let pendingReceptorPC = null;
 function openScanner(mode){
   window._scanMode = mode;
   showScreen('screen-scanner');
+  document.getElementById('scannerErrorBox').style.display='none';
   startScannerCamera();
 }
 let scannerStream=null, scannerRAF=null;
@@ -525,7 +547,12 @@ async function startScannerCamera(){
     scannerStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
     document.getElementById('scanVideo').srcObject = scannerStream;
     scanLoop();
-  }catch(e){ toast('No se pudo abrir la cámara para escanear'); closeScanner(); }
+  }catch(e){
+    console.error('Error abriendo cámara del escáner:', e);
+    const box = document.getElementById('scannerErrorBox');
+    box.style.display='block';
+    box.textContent = 'No se pudo abrir la cámara. Motivo: ' + (e && e.message ? e.message : String(e)) + '. Puedes usar el campo de abajo para pegar el código en su lugar.';
+  }
 }
 function scanLoop(){
   const video = document.getElementById('scanVideo');
