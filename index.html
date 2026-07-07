@@ -268,11 +268,11 @@
 </div>
 
 <!-- CDN libs: se descargan una vez y quedan cacheadas por el Service Worker para uso 100% offline después -->
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd/dist/coco-ssd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js/dist/face-api.min.js"></script>
 
 <script>
 /* ======================= SecurityFran core ======================= */
@@ -1117,30 +1117,11 @@ function closeQrShow(){
   if(appState.role==='receptor') showTab('receptor'); else showScreen('screen-emisor');
 }
 
-/* -------- Service Worker: cachea todo para uso 100% offline tras la 1ª carga -------- */
+/* -------- Service Worker: cachea solo librerías pesadas; la app (HTML) siempre se comprueba primero por red -------- */
 if('serviceWorker' in navigator){
-  const swCode = `
-    const CACHE='securifran-v1';
-    self.addEventListener('install', e=>{ self.skipWaiting(); });
-    self.addEventListener('activate', e=>{ self.clients.claim(); });
-    self.addEventListener('fetch', e=>{
-      e.respondWith(
-        caches.open(CACHE).then(async cache=>{
-          const cached = await cache.match(e.request);
-          if(cached) return cached;
-          try{
-            const resp = await fetch(e.request);
-            if(resp && resp.status===200) cache.put(e.request, resp.clone());
-            return resp;
-          }catch(err){
-            return cached || new Response('Offline y no cacheado aún', {status:503});
-          }
-        })
-      );
-    });
-  `;
-  const blob = new Blob([swCode], {type:'application/javascript'});
-  navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(()=>{});
+  navigator.serviceWorker.register('./sw.js').then(reg=>{
+    reg.update(); // fuerza comprobar si hay una versión nueva del sw.js cada carga
+  }).catch(()=>{});
 }
 
 /* -------- Init -------- */
