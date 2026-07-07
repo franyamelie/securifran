@@ -464,7 +464,11 @@ async function toggleTorch(){
 }
 
 function makePeerConnection(){
-  const pc = new RTCPeerConnection({ iceServers: [] }); // red local pura, sin STUN/TURN
+  // STUN público SOLO se usa (si hay Internet en ese instante) para resolver el problema de
+  // mDNS/nombres .local que muchos routers domésticos no dejan pasar entre dispositivos.
+  // El vídeo en sí NUNCA pasa por Internet: sigue siendo una conexión directa entre los dos móviles.
+  // Si no hay Internet en ese momento, esto simplemente no se usa y se sigue intentando solo por red local.
+  const pc = new RTCPeerConnection({ iceServers: [{urls:'stun:stun.l.google.com:19302'}] });
   return pc;
 }
 async function waitIceComplete(pc){
@@ -474,14 +478,14 @@ async function waitIceComplete(pc){
       if(pc.iceGatheringState==='complete'){ pc.removeEventListener('icegatheringstatechange', check); res(); }
     }
     pc.addEventListener('icegatheringstatechange', check);
-    setTimeout(res, 3000); // fallback: no esperar indefinidamente
+    setTimeout(res, 5000); // fallback: no esperar indefinidamente, pero le damos más margen
   });
 }
 
 let emisorDataChannel=null;
 function setupEmisorDataChannel(dc){
   emisorDataChannel = dc;
-  dc.onmessage = (ev)=>{
+  dc.onmessage = async (ev)=>{
     let msg; try{ msg = JSON.parse(ev.data); }catch(e){ return; }
     if(msg.cmd==='motion_alert'){
       if(appState.settings.vibrEnabled && navigator.vibrate) navigator.vibrate([150,80,150]);
@@ -492,8 +496,27 @@ function setupEmisorDataChannel(dc){
       if(appState.settings.flashOnMotion && emisorTrack){
         flashWarningPulse();
       }
+    } else if(msg.cmd==='renegotiate-answer'){
+      try{
+        await emisorPC.setRemoteDescription({type:'answer', sdp: msg.sdp});
+        console.log('Reconexión automática completada');
+        toast('Reconectado automáticamente ✅');
+      }catch(e){ console.warn('Fallo aplicando respuesta de reconexión:', e); }
     }
   };
+}
+let _iceRestartTimer=null, _iceRestartAttempts=0;
+async function attemptIceRestart(){
+  if(!emisorPC || !emisorDataChannel || emisorDataChannel.readyState!=='open') return;
+  if(_iceRestartAttempts>=5){ console.warn('Demasiados intentos de reconexión automática, deteniendo.'); return; }
+  _iceRestartAttempts++;
+  try{
+    const offer = await emisorPC.createOffer({iceRestart:true});
+    await emisorPC.setLocalDescription(offer);
+    await waitIceComplete(emisorPC);
+    emisorDataChannel.send(JSON.stringify({cmd:'renegotiate-offer', sdp: emisorPC.localDescription.sdp}));
+    console.log('Intento de reconexión automática enviado (#'+_iceRestartAttempts+')');
+  }catch(e){ console.warn('No se pudo reiniciar ICE:', e); }
 }
 async function flashWarningPulse(){
   try{
@@ -536,9 +559,21 @@ async function emisorStart(){
   emisorPC.oniceconnectionstatechange = ()=>{
     console.log('ICE state (emisor):', emisorPC.iceConnectionState);
     updateDiagBox('diagEmisor', 'ICE: '+emisorPC.iceConnectionState);
+    if(emisorPC.iceConnectionState==='connected' || emisorPC.iceConnectionState==='completed'){
+      _iceRestartAttempts = 0; // resetear contador tras reconectar bien
+    }
+    if(emisorPC.iceConnectionState==='disconnected' || emisorPC.iceConnectionState==='failed'){
+      clearTimeout(_iceRestartTimer);
+      _iceRestartTimer = setTimeout(attemptIceRestart, 2000);
+    }
   };
+  let emCandCount=0;
   emisorPC.onicecandidate = (ev)=>{
-    if(ev.candidate) console.log('Candidato local (emisor):', ev.candidate.candidate);
+    if(ev.candidate){
+      emCandCount++;
+      console.log('Candidato local (emisor):', ev.candidate.candidate);
+      updateDiagBox('diagEmisor', 'Candidatos encontrados: '+emCandCount);
+    }
   };
   const offer = await emisorPC.createOffer();
   await emisorPC.setLocalDescription(offer);
@@ -642,7 +677,22 @@ async function processConnectionCode(data){
     const pc = makePeerConnection();
     camConnections[id] = { pc, id };
     pc.ontrack = (ev)=>{ attachCamStream(id, ev.streams[0]); };
-    pc.ondatachannel = (ev)=>{ camConnections[id].dataChannel = ev.channel; };
+    pc.ondatachannel = (ev)=>{
+      camConnections[id].dataChannel = ev.channel;
+      ev.channel.onmessage = async (msgEv)=>{
+        let msg; try{ msg = JSON.parse(msgEv.data); }catch(e){ return; }
+        if(msg.cmd==='renegotiate-offer'){
+          try{
+            await pc.setRemoteDescription({type:'offer', sdp: msg.sdp});
+            const ans = await pc.createAnswer();
+            await pc.setLocalDescription(ans);
+            await waitIceComplete(pc);
+            ev.channel.send(JSON.stringify({cmd:'renegotiate-answer', sdp: pc.localDescription.sdp}));
+            console.log('Renegociación (reconexión automática) respondida para', id);
+          }catch(e){ console.warn('Fallo respondiendo renegociación en receptor:', e); }
+        }
+      };
+    };
     pc.onconnectionstatechange = ()=>{
       if(pc.connectionState==='connected') toast('Cámara '+id+' conectada');
       updateDiagBox('diagReceptor', id+': conn='+pc.connectionState);
