@@ -689,7 +689,9 @@ async function emisorStart(){
   const offer = await emisorPC.createOffer();
   await emisorPC.setLocalDescription(offer);
   await waitIceComplete(emisorPC);
-  const payload = JSON.stringify({t:'offer', sdp: slimSdp(emisorPC.localDescription.sdp)});
+  const slimmedOfferSdp = slimSdp(emisorPC.localDescription.sdp);
+  await emisorPC.setLocalDescription({type:'offer', sdp: slimmedOfferSdp}); // el emisor usa por dentro EXACTAMENTE lo mismo que envía
+  const payload = JSON.stringify({t:'offer', sdp: slimmedOfferSdp});
   showQr(payload, 'Envía este código al RECEPTOR', 'Compártelo por Bluetooth/Nearby, o que te escaneen el QR.', ()=>{
     closeQrShow();
     document.getElementById('btnScanAnswer').style.display='block';
@@ -937,7 +939,9 @@ async function processConnectionCode(data){
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await waitIceComplete(pc);
-    const payload = JSON.stringify({t:'answer', sdp: slimSdp(pc.localDescription.sdp)});
+    const slimmedAnswerSdp = slimSdp(pc.localDescription.sdp);
+    await pc.setLocalDescription({type:'answer', sdp: slimmedAnswerSdp}); // el receptor usa por dentro EXACTAMENTE lo mismo que envía
+    const payload = JSON.stringify({t:'answer', sdp: slimmedAnswerSdp});
     createCamTile(id);
     showQr(payload, 'Envía este código al EMISOR', 'El emisor debe introducirlo para completar la conexión.', ()=>{
       closeQrShow(); showTab('receptor');
