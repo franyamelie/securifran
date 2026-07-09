@@ -763,15 +763,7 @@ function tryCallReceptor(receptorId){
     setupEmisorDataChannel(adapter);
   }catch(e){ console.warn('No se pudo abrir canal de datos automático:', e); }
 
-  // Si en algún momento no está ya no hace falta reintentar seguido; PeerJS mantiene la llamada viva.
-  if(!setTimeout._fixedRetryScheduled){
-    setInterval(()=>{
-      if(fixedPeer && !fixedPeer.destroyed && call.open === false){
-        tryCallReceptor(receptorId);
-      }
-    }, 8000);
-    setTimeout._fixedRetryScheduled = true;
-  }
+  // La reconexión ya la gestionan los eventos 'close' y 'error' de la propia llamada, más arriba.
 }
 
 function startFixedNameReceptor(){
