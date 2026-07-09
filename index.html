@@ -499,18 +499,30 @@ async function startEmisorCamera(){
     document.getElementById('btnRetryCam').style.display='block';
   }
 }
-let _previewCanvasRAF=null;
+let _previewCanvasRAF=null, _previewFrameCount=0;
 function startEmisorPreviewCanvas(){
   if(_previewCanvasRAF) cancelAnimationFrame(_previewCanvasRAF);
   const video = document.getElementById('emisorVideo');
   const canvas = document.getElementById('emisorPreviewCanvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  _previewFrameCount = 0;
   function tick(){
-    if(video.readyState >= video.HAVE_CURRENT_DATA){
-      if(canvas.width !== video.videoWidth && video.videoWidth){
+    if(video.readyState >= video.HAVE_CURRENT_DATA && video.videoWidth){
+      if(canvas.width !== video.videoWidth){
         canvas.width = video.videoWidth; canvas.height = video.videoHeight;
       }
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // Fuerza una lectura y reescritura real de los píxeles (por CPU), para
+      // descartar que el problema de color venga de una ruta acelerada por hardware.
+      try{
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        ctx.putImageData(frame, 0, 0);
+        if(_previewFrameCount === 5){
+          const d = frame.data;
+          console.log('Muestra de píxel (debería tener R,G,B distintos si hay color):', d[0], d[1], d[2]);
+        }
+      }catch(e){ /* si falla, se queda el drawImage normal */ }
+      _previewFrameCount++;
     }
     _previewCanvasRAF = requestAnimationFrame(tick);
   }
@@ -774,10 +786,8 @@ function startFixedNameReceptor(){
     call.answer();
     call.on('stream', (stream)=>{
       const id = 'auto';
-      if(!camConnections[id]){
-        camConnections[id] = { id };
-        createCamTile(id);
-      }
+      if(!camConnections[id]) camConnections[id] = { id };
+      if(!document.getElementById('tile-'+id)) createCamTile(id);
       camConnections[id].stream = stream;
       attachCamStream(id, stream);
       toast('Emisor "'+ids.room+'" conectado automáticamente ✅');
@@ -786,6 +796,7 @@ function startFixedNameReceptor(){
   fixedPeerReceptor.on('connection', (dataConn)=>{
     const id = 'auto';
     if(!camConnections[id]) camConnections[id] = { id };
+    if(!document.getElementById('tile-'+id)) createCamTile(id);
     const adapter = { readyState:'connecting', send:(s)=>{ try{ dataConn.send(s); }catch(e){} } };
     dataConn.on('open', ()=>{ adapter.readyState='open'; });
     camConnections[id].dataChannel = adapter;
