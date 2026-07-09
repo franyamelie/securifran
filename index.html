@@ -54,6 +54,7 @@
   video{width:100%;border-radius:14px;background:#000;display:block;}
   #liveWrap{position:relative;width:100%;min-height:340px;aspect-ratio:3/4;border-radius:14px;overflow:hidden;background:#000;}
   #liveWrap video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  #emisorPreviewCanvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
   #overlayCanvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
   .badge{background:var(--accent-dim);color:var(--accent);font-size:11px;padding:3px 8px;border-radius:8px;font-weight:600;}
   .badge.rec{background:#4a0000;color:var(--danger);}
@@ -110,7 +111,8 @@
     <div id="emisorErrorBox" style="display:none;color:var(--danger);font-size:13px;background:#2a0d0d;padding:10px;border-radius:10px;margin-bottom:6px;"></div>
     <button class="btn ghost" id="btnRetryCam" style="display:none;margin-bottom:12px;" onclick="startEmisorCamera()">🔁 Reintentar acceso a la cámara</button>
     <div id="liveWrap" style="margin-bottom:12px;">
-      <video id="emisorVideo" autoplay playsinline muted></video>
+      <video id="emisorVideo" autoplay playsinline muted style="display:none;"></video>
+      <canvas id="emisorPreviewCanvas"></canvas>
     </div>
     <div class="grid2" style="margin-bottom:10px;">
       <button class="btn" id="btnTorch" onclick="toggleTorch()">🔦 LED / Flash</button>
@@ -124,6 +126,11 @@
       <button class="btn" style="display:none;" id="btnScanAnswer" onclick="openScanner('answer')">📷 Escanear respuesta del receptor</button>
     </div>
     <div class="card">
+      <h2>🔁 Sincronización automática</h2>
+      <p class="sub" id="fixedStatusEm">Configura un nombre fijo en Ajustes para activarla.</p>
+      <button class="btn" onclick="startFixedNameEmisor()">Activar / reconectar ahora</button>
+    </div>
+    <div class="card">
       <div class="row"><span>Mantener pantalla encendida (evita cortes)</span><div class="toggle" id="tglContEmit" onclick="toggleSetting(this,'contEmitEnabled'); applyWakeLockSetting();"><div class="knob"></div></div></div>
     </div>
   </div>
@@ -134,6 +141,7 @@
       <h1 style="margin:0;">Cámaras</h1>
       <button class="btn small" onclick="openScanner('offer')">➕ Añadir cámara</button>
     </div>
+    <button class="btn" style="margin-bottom:10px;" onclick="startFixedNameReceptor()">🔁 Activar recepción automática</button>
     <div id="diagReceptor" style="display:none;font-size:11px;color:var(--muted);margin-bottom:6px;"></div>
     <div id="camGrid"></div>
     <div class="center-msg" id="noCamsMsg">
@@ -216,6 +224,11 @@
       <input type="text" id="emergencyPhoneInput" placeholder="Ej: 600123456" oninput="saveEmergencyPhone(this.value)">
     </div>
     <div class="card">
+      <h2>🔁 Sincronización automática (opcional)</h2>
+      <p class="sub">Además del código QR/manual de siempre, puedes poner un nombre fijo aquí. Con datos o WiFi con Internet activos, los dos móviles se reconectarán solos cada vez que abras la app, sin volver a emparejar. El vídeo sigue siendo directo entre los móviles.</p>
+      <input type="text" id="fixedRoomInput" placeholder="Ej: TallerMontiel01" oninput="saveFixedRoomName(this.value)">
+    </div>
+    <div class="card">
       <h2>Almacenamiento</h2>
       <div class="row" style="margin-bottom:8px;"><span>Retención de grabaciones</span><span class="badge">30 días</span></div>
       <button class="btn ghost" onclick="cleanupOldNow()">Limpiar grabaciones antiguas ahora</button>
@@ -295,6 +308,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd/dist/coco-ssd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/face-api.js/dist/face-api.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.5/peerjs.min.js"></script>
 
 <script>
 /* ======================= SecurityFran core ======================= */
@@ -384,6 +398,7 @@ document.addEventListener('visibilitychange', async ()=>{
 });
 
 function stopAllMediaStreams(){
+  if(_previewCanvasRAF){ cancelAnimationFrame(_previewCanvasRAF); _previewCanvasRAF=null; }
   if(emisorStream){ emisorStream.getTracks().forEach(t=>t.stop()); emisorStream=null; }
   if(emisorPC){ try{ emisorPC.close(); }catch(e){} emisorPC=null; }
   Object.values(camConnections).forEach(c=>{
@@ -392,6 +407,9 @@ function stopAllMediaStreams(){
   });
   camConnections = {};
   if(scannerStream){ scannerStream.getTracks().forEach(t=>t.stop()); scannerStream=null; }
+  if(fixedPeer){ try{ fixedPeer.destroy(); }catch(e){} fixedPeer=null; }
+  if(fixedPeerReceptor){ try{ fixedPeerReceptor.destroy(); }catch(e){} fixedPeerReceptor=null; }
+  clearTimeout(fixedCallRetryTimer);
 }
 function resetRole(){
   stopAllMediaStreams();
@@ -409,6 +427,7 @@ function initRoleUI(){
   } else if(appState.role==='receptor'){
     document.getElementById('navbar').style.display='flex';
     showTab('receptor');
+    if((appState.settings.fixedRoomName||'').trim()) startFixedNameReceptor();
   }
 }
 function showTab(tab){
@@ -433,6 +452,11 @@ function renderSettingsUI(){
   document.getElementById('tglContEmit').classList.toggle('on', s.contEmitEnabled);
   document.getElementById('tglLowPower').classList.toggle('on', s.lowPowerMode);
   document.getElementById('emergencyPhoneInput').value = s.emergencyPhone || '';
+  document.getElementById('fixedRoomInput').value = s.fixedRoomName || '';
+}
+function saveFixedRoomName(v){
+  appState.settings.fixedRoomName = v.trim();
+  saveSettings();
 }
 function saveEmergencyPhone(v){
   appState.settings.emergencyPhone = v.trim();
@@ -454,10 +478,12 @@ async function startEmisorCamera(){
     document.getElementById('emisorVideo').srcObject = emisorStream;
     try{ await document.getElementById('emisorVideo').play(); }catch(playErr){ console.warn('Autoplay bloqueado, se necesitará un toque:', playErr); }
     emisorTrack = emisorStream.getVideoTracks()[0];
+    startEmisorPreviewCanvas();
     document.getElementById('emStatus').textContent = 'Cámara lista';
     document.getElementById('emisorErrorBox').style.display='none';
     document.getElementById('btnRetryCam').style.display='none';
     applyWakeLockSetting();
+    if((appState.settings.fixedRoomName||'').trim()) startFixedNameEmisor();
   }catch(err){
     console.error('Error accediendo a la cámara del emisor:', err);
     document.getElementById('emStatus').textContent = 'Cámara no disponible';
@@ -471,6 +497,24 @@ async function startEmisorCamera(){
     document.getElementById('btnRetryCam').style.display='block';
   }
 }
+let _previewCanvasRAF=null;
+function startEmisorPreviewCanvas(){
+  if(_previewCanvasRAF) cancelAnimationFrame(_previewCanvasRAF);
+  const video = document.getElementById('emisorVideo');
+  const canvas = document.getElementById('emisorPreviewCanvas');
+  const ctx = canvas.getContext('2d');
+  function tick(){
+    if(video.readyState >= video.HAVE_CURRENT_DATA){
+      if(canvas.width !== video.videoWidth && video.videoWidth){
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      }
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    }
+    _previewCanvasRAF = requestAnimationFrame(tick);
+  }
+  tick();
+}
+
 async function switchCamera(){
   currentFacing = currentFacing==='environment' ? 'user' : 'environment';
   if(emisorStream) emisorStream.getTracks().forEach(t=>t.stop());
@@ -623,6 +667,124 @@ async function emisorStart(){
   showQr(payload, 'Envía este código al RECEPTOR', 'Compártelo por Bluetooth/Nearby, o que te escaneen el QR.', ()=>{
     closeQrShow();
     document.getElementById('btnScanAnswer').style.display='block';
+  });
+}
+
+/* ============ SINCRONIZACIÓN AUTOMÁTICA POR NOMBRE FIJO (adicional, no toca el flujo QR/manual) ============ */
+// Usa PeerJS + su servidor gratuito en la nube SOLO para el "saludo inicial" (necesita un instante de
+// Internet). El vídeo en sí sigue siendo 100% directo entre los dos móviles, igual que con el QR.
+let fixedPeer = null, fixedPeerReceptor = null, fixedCallRetryTimer = null, fixedRetryCount = 0;
+
+function fixedIds(){
+  const room = (appState.settings.fixedRoomName || '').trim().replace(/[^a-zA-Z0-9_-]/g, '');
+  return { em: 'sf-' + room + '-emisor', re: 'sf-' + room + '-receptor', room };
+}
+
+function startFixedNameEmisor(){
+  const ids = fixedIds();
+  if(!ids.room){ toast('Pon primero un nombre fijo en Ajustes → Sincronización automática'); return; }
+  if(!emisorStream){ toast('Esperando cámara...'); return; }
+  if(typeof Peer === 'undefined'){ toast('No se pudo cargar el servicio de sincronización (revisa Internet).'); return; }
+  if(fixedPeer){ try{ fixedPeer.destroy(); }catch(e){} }
+  fixedRetryCount = 0;
+  const statusEl = document.getElementById('fixedStatusEm');
+  statusEl.textContent = 'Conectando al servicio de sincronización...';
+  fixedPeer = new Peer(ids.em);
+  fixedPeer.on('open', ()=>{
+    statusEl.textContent = 'Buscando al receptor "'+ids.room+'"...';
+    tryCallReceptor(ids.re);
+  });
+  fixedPeer.on('error', (err)=>{
+    console.warn('PeerJS emisor error:', err);
+    if(err.type === 'unavailable-id'){
+      statusEl.textContent = 'Ese nombre ya está en uso ahora mismo, reintentando en unos segundos...';
+      setTimeout(()=>startFixedNameEmisor(), 6000);
+    } else if(err.type !== 'peer-unavailable'){
+      statusEl.textContent = 'Error de sincronización: ' + err.type + ' (revisa Internet)';
+    }
+  });
+  fixedPeer.on('disconnected', ()=>{
+    statusEl.textContent = 'Sin conexión al servicio, reintentando...';
+    setTimeout(()=>{ if(fixedPeer && !fixedPeer.destroyed) fixedPeer.reconnect(); }, 3000);
+  });
+}
+function tryCallReceptor(receptorId){
+  clearTimeout(fixedCallRetryTimer);
+  if(!fixedPeer || fixedPeer.destroyed) return;
+  const statusEl = document.getElementById('fixedStatusEm');
+  const call = fixedPeer.call(receptorId, emisorStream);
+  if(!call){
+    fixedCallRetryTimer = setTimeout(()=>tryCallReceptor(receptorId), 5000);
+    return;
+  }
+  call.on('stream', ()=>{ /* el emisor no necesita hacer nada con esto */ });
+  call.on('close', ()=>{
+    statusEl.textContent = 'Receptor desconectado, reintentando...';
+    fixedCallRetryTimer = setTimeout(()=>tryCallReceptor(receptorId), 4000);
+  });
+  call.on('error', (e)=>{
+    console.warn('Error en llamada automática:', e);
+    fixedCallRetryTimer = setTimeout(()=>tryCallReceptor(receptorId), 5000);
+  });
+  statusEl.textContent = 'Conectado automáticamente con "'+fixedIds().room+'" ✅';
+
+  // Canal de datos para alertas/reconexión, reutilizando toda la lógica ya existente
+  try{
+    const dataConn = fixedPeer.connect(receptorId, {label:'ctrl'});
+    const adapter = { readyState:'connecting', send:(s)=>{ try{ dataConn.send(s); }catch(e){} } };
+    dataConn.on('open', ()=>{ adapter.readyState='open'; });
+    dataConn.on('data', (d)=>{ if(adapter.onmessage) adapter.onmessage({data: typeof d==='string'?d:JSON.stringify(d)}); });
+    setupEmisorDataChannel(adapter);
+  }catch(e){ console.warn('No se pudo abrir canal de datos automático:', e); }
+
+  // Si en algún momento no está ya no hace falta reintentar seguido; PeerJS mantiene la llamada viva.
+  if(!setTimeout._fixedRetryScheduled){
+    setInterval(()=>{
+      if(fixedPeer && !fixedPeer.destroyed && call.open === false){
+        tryCallReceptor(receptorId);
+      }
+    }, 8000);
+    setTimeout._fixedRetryScheduled = true;
+  }
+}
+
+function startFixedNameReceptor(){
+  const ids = fixedIds();
+  if(!ids.room){ toast('Pon primero un nombre fijo en Ajustes → Sincronización automática'); return; }
+  if(typeof Peer === 'undefined'){ toast('No se pudo cargar el servicio de sincronización (revisa Internet).'); return; }
+  if(fixedPeerReceptor){ try{ fixedPeerReceptor.destroy(); }catch(e){} }
+  toast('Activando recepción automática para "'+ids.room+'"...');
+  fixedPeerReceptor = new Peer(ids.re);
+  fixedPeerReceptor.on('open', ()=>{ toast('Esperando al emisor "'+ids.room+'"...'); });
+  fixedPeerReceptor.on('call', (call)=>{
+    call.answer();
+    call.on('stream', (stream)=>{
+      const id = 'auto';
+      if(!camConnections[id]){
+        camConnections[id] = { id };
+        createCamTile(id);
+      }
+      camConnections[id].stream = stream;
+      attachCamStream(id, stream);
+      toast('Emisor "'+ids.room+'" conectado automáticamente ✅');
+    });
+  });
+  fixedPeerReceptor.on('connection', (dataConn)=>{
+    const id = 'auto';
+    if(!camConnections[id]) camConnections[id] = { id };
+    const adapter = { readyState:'connecting', send:(s)=>{ try{ dataConn.send(s); }catch(e){} } };
+    dataConn.on('open', ()=>{ adapter.readyState='open'; });
+    camConnections[id].dataChannel = adapter;
+  });
+  fixedPeerReceptor.on('error', (err)=>{
+    console.warn('PeerJS receptor error:', err);
+    if(err.type === 'unavailable-id'){
+      toast('Ese nombre ya está activo ahora mismo, reintentando...');
+      setTimeout(()=>startFixedNameReceptor(), 6000);
+    }
+  });
+  fixedPeerReceptor.on('disconnected', ()=>{
+    setTimeout(()=>{ if(fixedPeerReceptor && !fixedPeerReceptor.destroyed) fixedPeerReceptor.reconnect(); }, 3000);
   });
 }
 
