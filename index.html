@@ -630,6 +630,18 @@ function restrictCodecs(pc){
   }catch(e){ console.warn('No se pudieron restringir los códecs (no crítico):', e); }
 }
 
+// Recorta el SDP quitando información técnica opcional (extensiones de cabecera RTP,
+// candidatos TCP) que el navegador añade por defecto pero que no hace falta para conectar.
+// Esto reduce mucho el tamaño del código QR/manual sin afectar a la conexión real.
+function slimSdp(sdp){
+  return sdp
+    .split('\r\n')
+    .filter(line => !line.startsWith('a=extmap'))
+    .filter(line => !(line.startsWith('a=candidate') && / tcp /i.test(line)))
+    .filter(line => !line.startsWith('a=rtcp-rsize'))
+    .join('\r\n');
+}
+
 async function emisorStart(){
   if(!emisorStream){ toast('Esperando cámara...'); return; }
   emisorPC = makePeerConnection();
@@ -665,7 +677,7 @@ async function emisorStart(){
   const offer = await emisorPC.createOffer();
   await emisorPC.setLocalDescription(offer);
   await waitIceComplete(emisorPC);
-  const payload = JSON.stringify({t:'offer', sdp: emisorPC.localDescription.sdp});
+  const payload = JSON.stringify({t:'offer', sdp: slimSdp(emisorPC.localDescription.sdp)});
   showQr(payload, 'Envía este código al RECEPTOR', 'Compártelo por Bluetooth/Nearby, o que te escaneen el QR.', ()=>{
     closeQrShow();
     document.getElementById('btnScanAnswer').style.display='block';
@@ -914,7 +926,7 @@ async function processConnectionCode(data){
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await waitIceComplete(pc);
-    const payload = JSON.stringify({t:'answer', sdp: pc.localDescription.sdp});
+    const payload = JSON.stringify({t:'answer', sdp: slimSdp(pc.localDescription.sdp)});
     createCamTile(id);
     showQr(payload, 'Envía este código al EMISOR', 'El emisor debe introducirlo para completar la conexión.', ()=>{
       closeQrShow(); showTab('receptor');
@@ -1472,15 +1484,16 @@ async function showQr(text, title, sub, cb){
   const canvas = document.getElementById('qrCanvas');
   const errBox = document.getElementById('qrErrorBox');
   errBox.style.display='none';
-  const compressed = await compressToBase64(text);
-  _lastCompressedCode = compressed;
+    const compressed = await compressToBase64(text);
+    _lastCompressedCode = compressed;
+    console.log('Tamaño del código de conexión:', compressed.length, 'caracteres');
   try{
     const QRLib = (typeof QRCode !== 'undefined') ? QRCode : (typeof qrcode !== 'undefined' ? qrcode : null);
     if(!QRLib){
       throw new Error('La librería de códigos QR no se cargó (revisa la conexión a Internet en esta primera carga).');
     }
     await new Promise((resolve, reject)=>{
-      QRLib.toCanvas(canvas, compressed, {width:280, margin:1, errorCorrectionLevel:'L'}, function(err){
+      QRLib.toCanvas(canvas, compressed, {width:420, margin:3, errorCorrectionLevel:'L'}, function(err){
         if(err) reject(err); else resolve();
       });
     });
