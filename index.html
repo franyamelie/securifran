@@ -158,7 +158,7 @@
       <span class="badge" id="cvDetBadge">Detectando…</span>
       <span class="badge rec" id="cvRecBadge" style="display:none;">● REC</span>
     </div>
-    <div id="liveWrapFull" style="position:relative;flex:1;">
+    <div id="liveWrapFull" style="position:relative;flex:1;" onclick="retryFullVideoAudio()">
       <video id="fullVideo" autoplay playsinline></video>
       <canvas id="overlayCanvas"></canvas>
     </div>
@@ -996,6 +996,12 @@ async function ensureModelsLoaded(){
   await loadKnownFaceDescriptors();
 }
 
+function retryFullVideoAudio(){
+  const fullVideo = document.getElementById('fullVideo');
+  fullVideo.muted = false;
+  fullVideo.play().then(()=>toast('Audio activado')).catch(()=>{});
+}
+
 async function openFullscreenCam(id){
   fsCamId = id;
   const stream = camConnections[id].stream;
@@ -1003,6 +1009,11 @@ async function openFullscreenCam(id){
   showScreen('screen-camview');
   const fullVideo = document.getElementById('fullVideo');
   fullVideo.srcObject = stream;
+  fullVideo.muted = false;
+  try{ await fullVideo.play(); }catch(playErr){
+    console.warn('Reproducción con sonido bloqueada, reintentando...', playErr);
+    toast('Toca la pantalla si no se oye el audio');
+  }
   zoomLevel = 1; fullVideo.style.transform = 'scale(1)';
   nightVisionOn = false; fullVideo.style.filter = 'none';
   const nvBtn = document.getElementById('btnNightVision');
