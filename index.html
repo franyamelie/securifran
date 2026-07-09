@@ -107,6 +107,7 @@
   <!-- EMISOR -->
   <div class="screen" id="screen-emisor">
     <div class="row"><h1 style="margin:0;">Emisor</h1><span class="badge" id="emStatus">Sin conectar</span></div>
+    <button class="btn small" style="margin-bottom:10px;" onclick="showScreen('screen-settings'); renderSettingsUI(); renderKnownFaces(); document.getElementById('btnBackFromSettings').style.display='block';">⚙️ Ajustes</button>
     <div id="diagEmisor" style="display:none;font-size:11px;color:var(--muted);margin-bottom:6px;"></div>
     <div id="emisorErrorBox" style="display:none;color:var(--danger);font-size:13px;background:#2a0d0d;padding:10px;border-radius:10px;margin-bottom:6px;"></div>
     <button class="btn ghost" id="btnRetryCam" style="display:none;margin-bottom:12px;" onclick="startEmisorCamera()">🔁 Reintentar acceso a la cámara</button>
@@ -205,6 +206,7 @@
   <!-- AJUSTES -->
   <div class="screen" id="screen-settings">
     <h1>Ajustes</h1>
+    <button class="btn small" id="btnBackFromSettings" style="display:none;margin-bottom:10px;" onclick="showScreen('screen-emisor')">← Volver al emisor</button>
     <div class="card">
       <div class="row" style="margin-bottom:12px;"><span>Rol actual</span><span class="badge" id="curRoleBadge">-</span></div>
       <button class="btn ghost" onclick="resetRole()">Cambiar de rol</button>
@@ -435,7 +437,7 @@ function showTab(tab){
   if(tab==='receptor') showScreen('screen-receptor');
   if(tab==='recordings'){ showScreen('screen-recordings'); renderRecordings(); }
   if(tab==='stats'){ showScreen('screen-stats'); renderStats(); }
-  if(tab==='settings'){ showScreen('screen-settings'); renderSettingsUI(); renderKnownFaces(); }
+  if(tab==='settings'){ showScreen('screen-settings'); renderSettingsUI(); renderKnownFaces(); document.getElementById('btnBackFromSettings').style.display='none'; }
 }
 function toggleSetting(el, key){
   el.classList.toggle('on');
